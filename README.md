@@ -2,7 +2,7 @@
 
 Real-time multi-user drawing board built with **TypeScript**, **HTML5 Canvas**, **Express**, and **Socket.io** — Flam SSDE take-home assignment.
 
-## Status (Day 1)
+## Status (Day 2)
 
 | Feature | Status |
 |---------|--------|
@@ -10,8 +10,8 @@ Real-time multi-user drawing board built with **TypeScript**, **HTML5 Canvas**, 
 | Socket.io connected | ✅ |
 | Client HTML / CSS served | ✅ |
 | Local brush / eraser / clear | ✅ |
-| Real-time stroke sync | ⏳ next |
-| Cursor indicators | ⏳ |
+| Real-time stroke sync | ✅ |
+| Cursor indicators | ⏳ next |
 | Global undo / redo | ⏳ |
 | Deployed demo | ⏳ |
 
@@ -44,22 +44,23 @@ collaborative-canvas/
 └── dist/            # Build output (gitignored)
 ```
 
-## How to test (today)
+## How to test multi-user drawing
 
-1. Start the server and open one browser tab.
-2. Draw with brush, switch eraser, change color/size, clear.
-3. Open a second tab — you should see **Online** count update when the second client connects (drawing is still local-only until sync lands).
+1. `npm run build && npm start`
+2. Open [http://localhost:3000](http://localhost:3000) in two browser windows (or two browsers).
+3. Draw in one window — ink should appear **live** in the other while you move the pointer.
+4. Draw in both windows at once — strokes should not interfere.
 
-## Multi-user drawing (coming next)
-
-Stroke events will stream point-by-point so peers see ink as it is drawn, not only after mouse-up.
+Late joiners receive completed strokes via `room:state` and then stream live events.
 
 ## Known limitations
 
-- Drawing is **not** synchronized across clients yet.
+- Clear is still local-only (not synced yet).
 - Undo/redo UI not wired.
+- No cursor position indicators yet.
 - No persistence across server restarts.
 - Single default room only.
+- Different window sizes can misalign relative stroke positions (CSS-pixel coords, full-bleed canvas).
 
 ## Time spent
 

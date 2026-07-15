@@ -5,8 +5,8 @@
   "main": "dist/server/server.js",
   "scripts": {
     "build": "npm run build:server && npm run build:client",
-    "build:server": "tsc -p tsconfig.json",
-    "build:client": "esbuild client/main.ts --bundle --outfile=dist/public/bundle.js --platform=browser --target=es2020 && node scripts/copy-static.js",
+    "build:server": "npx tsc -p tsconfig.json",
+    "build:client": "npx esbuild client/main.ts --bundle --outfile=dist/public/bundle.js --platform=browser --target=es2020 && node scripts/copy-static.js",
     "start": "node dist/server/server.js",
     "dev": "npm run build && npm start",
     "dev:watch": "node scripts/dev.js"

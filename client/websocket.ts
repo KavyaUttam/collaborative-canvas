@@ -1,12 +1,10 @@
-import type { ServerMessage } from "../shared/protocol";
+import type { ClientMessage, ServerMessage } from "../shared/protocol";
 import { io, type Socket } from "socket.io-client";
 
 export type MessageHandler = (message: ServerMessage) => void;
 
 /**
  * Networking boundary. Knows nothing about canvas drawing.
- * Today: connect + receive room state / presence.
- * Next: emit stroke events for real-time sync.
  */
 export class SocketClient {
   private socket: Socket | null = null;
@@ -45,6 +43,13 @@ export class SocketClient {
       }
       this.onMessage(payload);
     });
+  }
+
+  send(message: ClientMessage): void {
+    if (!this.socket?.connected) {
+      return;
+    }
+    this.socket.emit("message", message);
   }
 
   disconnect(): void {

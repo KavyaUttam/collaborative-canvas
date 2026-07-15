@@ -41,33 +41,45 @@ interface Stroke {
 
 Why: redraw, sync, and global undo/redo become operations on a list instead of framebuffer snapshots.
 
-## Local drawing flow (implemented)
+## Local + remote drawing flow (implemented)
 
 ```
-pointerdown → DrawingEngine.startStroke
-pointermove → DrawingEngine.continueStroke  (incremental line segments)
-pointerup   → DrawingEngine.finishStroke    (append to stroke list)
+pointerdown → DrawingEngine.startLocalStroke → emit stroke:start
+pointermove → DrawingEngine.continueLocalStroke → emit stroke:point
+pointerup   → DrawingEngine.finishLocalStroke → emit stroke:end
+
+peers:
+  stroke:start → DrawingEngine.startRemoteStroke   (incremental paint)
+  stroke:point → DrawingEngine.continueRemoteStroke
+  stroke:end   → DrawingEngine.finishRemoteStroke  (move into completed list)
 ```
 
-Incremental painting avoids full-canvas redraws on every mouse move. Full `redraw()` runs on resize (and later after undo).
+Incremental painting avoids full-canvas redraws on every mouse move / inbound point. Full `redraw()` runs on resize and after loading `room:state`.
 
-## WebSocket protocol (skeleton)
+Coordinates are **CSS pixels**; the canvas backing store uses `devicePixelRatio` via `ctx.setTransform`, so retina screens stay sharp without breaking cross-device sync.
 
-Messages use a discriminated `type` field. Current live events:
+## WebSocket protocol (live)
 
-| Direction | Types in use today |
-|-----------|--------------------|
-| Server → Client | `room:state`, `user:joined`, `user:left` |
-| Client → Server | _(stroke sync not yet)_ |
+Messages use a discriminated `type` field.
 
-Planned stroke stream (point-by-point for live ink):
+| Direction | Types in use |
+|-----------|----------------|
+| Client → Server | `stroke:start`, `stroke:point`, `stroke:end` |
+| Server → Client | `room:state`, `stroke:*`, `user:joined`, `user:left`, `error` |
 
-- `stroke:start` / `stroke:point` / `stroke:end`
+Broadcast rule: peers only (`socket.to(room)`), never echo back to the sender (they already painted locally).
+
+Server pipeline:
+
+```
+Receive → Validate (shape, ownership, finite points) → Persist active/completed → Broadcast
+```
+
+Planned next:
+
 - `cursor:move`
 - `history:undo` / `history:redo`
 - `canvas:clear`
-
-See `shared/protocol.ts` for the full TypeScript union.
 
 ## Undo / redo strategy (planned)
 
