@@ -35,8 +35,8 @@ function start(): void {
   const rooms = new RoomManager();
   registerSocketHandlers(io, rooms);
 
-  httpServer.listen(PORT, () => {
-    console.log(`Collaborative canvas listening on http://localhost:${PORT}`);
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Collaborative canvas listening on http://0.0.0.0:${PORT}`);
   });
 }
 

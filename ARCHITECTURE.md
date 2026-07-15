@@ -1,6 +1,6 @@
 # Architecture
 
-Living document for the Flam collaborative canvas assignment. Updated as features land.
+Design notes for the Flam collaborative canvas assignment.
 
 ## High-level stack
 
@@ -8,25 +8,63 @@ Living document for the Flam collaborative canvas assignment. Updated as feature
 Browser (Canvas + DOM)  ←→  Socket.io  ←→  Express / Node
          │                                      │
     DrawingEngine                          DrawingState
-    (stroke list)                          (authoritative)
+    (local stroke list)                    (authoritative)
 ```
+
+Single process serves both:
+
+- static client assets (`index.html`, CSS, bundled JS)
+- Socket.io on the same HTTP server (same origin)
+
+## Data flow
+
+```
+Mouse / pointer
+        │
+        ▼
+CanvasController
+        │
+        ├─► DrawingEngine  (paint locally, keep stroke list)
+        │
+        └─► Socket.io client  (stroke:start / point / end, cursor:move)
+                    │
+                    ▼
+              Express server
+                    │
+                    ▼
+              DrawingState / RoomManager
+                    │
+        ┌───────────┴───────────┐
+        │                       │
+   peers only              whole room
+ (live ink/cursors)     (undo/redo/clear)
+        │                       │
+        ▼                       ▼
+ remote DrawingEngine      remove / append / clear
+        │                       │
+        ▼                       ▼
+     Canvas                 Canvas (replay when needed)
+```
+
+Cursors never touch the drawing canvas — they render on an HTML overlay so ink and presence stay independent.
 
 ## Separation of concerns
 
 | Module | Responsibility |
 |--------|----------------|
-| `client/canvas.ts` | Local drawing only (`DrawingEngine` + pointer → strokes) |
-| `client/websocket.ts` | Connect / send / receive messages |
-| `client/ui.ts` | Toolbar controls |
+| `client/canvas.ts` | DrawingEngine + pointer → strokes (no networking) |
+| `client/cursors.ts` | Remote cursor HTML overlay |
+| `client/websocket.ts` | Connect / send / receive |
+| `client/ui.ts` | Toolbar + online user list |
 | `client/main.ts` | Composition root |
-| `server/drawingState.ts` | Authoritative stroke list + undo stacks |
-| `server/rooms.ts` | Room membership + user colors |
-| `server/socketHandlers.ts` | Socket event wiring |
-| `shared/protocol.ts` | Message + stroke shapes (single source of truth) |
+| `server/drawingState.ts` | Authoritative stroke history + redo stack |
+| `server/rooms.ts` | Membership + stable user colors/names |
+| `server/socketHandlers.ts` | Validate → mutate → broadcast |
+| `shared/protocol.ts` | Single TypeScript message/stroke contract |
 
-## Data model
+## Why vector strokes?
 
-We store **strokes**, not pixels:
+We store strokes, not pixels:
 
 ```ts
 interface Stroke {
@@ -39,68 +77,77 @@ interface Stroke {
 }
 ```
 
-Why: redraw, sync, and global undo/redo become operations on a list instead of framebuffer snapshots.
+| Benefit | Why it matters |
+|---------|----------------|
+| Bandwidth efficient | Point deltas beat PNG/blob frames |
+| Deterministic replay | Same stroke list → same canvas |
+| Enables global undo/redo | Pop/push strokes instead of framebuffer snapshots |
+| Handles resize | Redraw vectors after DPR/layout changes |
+| No image serialization | Avoids expensive encode/decode on the hot path |
 
-## Local + remote drawing flow (implemented)
+## Why doesn't the server render?
 
-```
-pointerdown → DrawingEngine.startLocalStroke → emit stroke:start
-pointermove → DrawingEngine.continueLocalStroke → emit stroke:point
-             (+ throttled cursor:move)
-pointerup   → DrawingEngine.finishLocalStroke → emit stroke:end
+The server’s job is **synchronization and authoritative history**. Rendering stays on clients so the Node process stays lightweight and scales with rooms/users rather than GPU/work per peer.
 
-peers:
-  stroke:*     → DrawingEngine remote path (incremental paint)
-  cursor:move  → HTML overlay indicators (never on drawing canvas)
-  history:*    → remove/append stroke then redraw / paint
-```
+## WebSocket protocol
 
-Incremental painting avoids full-canvas redraws on every mouse move / inbound point. Full `redraw()` runs on resize, undo, and after loading `room:state`.
-
-Coordinates are **CSS pixels**; the canvas backing store uses `devicePixelRatio` via `ctx.setTransform`, so retina screens stay sharp without breaking cross-device sync.
-
-## WebSocket protocol (live)
-
-Messages use a discriminated `type` field.
+Discriminated `type` unions in `shared/protocol.ts`.
 
 | Direction | Types |
 |-----------|--------|
 | Client → Server | `stroke:start/point/end`, `cursor:move`, `history:undo/redo`, `canvas:clear` |
 | Server → Client | `room:state`, `stroke:*`, `cursor:move`, `history:undone/redone`, `canvas:cleared`, `user:*`, `error` |
 
-Broadcast rules:
+### Broadcast rules
 
-- **Live ink / cursors:** peers only (`socket.to(room)`) — sender already applied locally.
-- **History mutate (undo/redo/clear):** entire room (`io.to(room)`) **after** the server updates authoritative state — every client converges on the same history.
+- **Live ink / cursors:** `socket.to(room)` (peers only). Sender already painted/applied locally.
+- **History mutate (undo/redo/clear):** update `DrawingState` first, then `io.to(room)` to **everyone**. All clients converge on the same history.
 
-Server pipeline:
+### Live ink stream
 
 ```
-Receive → Validate → Mutate DrawingState (if needed) → Broadcast
+mousedown → stroke:start
+mousemove → stroke:point   (one point per message)
+mouseup   → stroke:end
 ```
 
-## Undo / redo strategy (implemented)
+Peers see ink while it is drawn — not after the stroke finishes.
 
-- Two stacks on the server: completed stroke history + redo stack.
-- **Undo:** pop last completed stroke (any user) → push redo → broadcast `history:undone { strokeId }`.
-- **Redo:** pop redo → push history → broadcast `history:redone { stroke }`.
-- A new stroke clears the redo stack (standard editor semantics).
-- Clients never invent undo optimistically — they wait for the server event, then remove/replay strokes (vector redraw, not bitmap snapshots).
+## Why server-authoritative undo?
+
+```
+Client requests undo
+        ↓
+Server pops history → pushes redo stack
+        ↓
+Broadcast history:undone { strokeId }
+        ↓
+Every client removes that stroke and redraws
+```
+
+If each client undid optimistically, concurrent undos would diverge. Serializing mutations on the server keeps a single source of truth.
+
+Redo mirrors the inverse path (`history:redone` carries the full stroke). A new stroke clears the redo stack (standard editor semantics).
 
 ## Conflict resolution
 
-Simultaneous drawing is append-only; visual overlaps use painter’s order. Concurrent undos are serialized by the Node event loop on the authoritative `DrawingState`, so clients never disagree about which stroke left the history.
+- Simultaneous drawing is **append-only** — no locking per region.
+- Visual overlaps use painter’s order (earlier strokes underneath).
+- Eraser strokes are normal vector entries with `destination-out` compositing.
+- Concurrent undos/redos are ordered by the Node event loop on one `DrawingState`.
 
 ## Performance decisions
 
 | Choice | Rationale |
 |--------|-----------|
-| Stroke vectors, not image blobs | Smaller sync payloads; enables undo |
-| Incremental `lineTo` while drawing | Smooth ink without full redraw each move |
-| Pointer Events API | One path for mouse + touch (bonus mobile) |
+| Incremental `lineTo` while drawing | Avoids O(n) full replay on every mousemove |
+| Full replay only for history / resize / late join | Expensive work stays rare |
+| Cursor throttle (~20Hz) | Presence does not need stroke-level fidelity |
+| CSS pixels + `devicePixelRatio` transform | Sharp retina drawing without breaking sync |
 | Shared `protocol.ts` | Prevents client/server schema drift |
-| esbuild for client bundle | Fast build, no React/framework |
+| Separate cursor overlay | Drawing canvas stays pure ink |
+| esbuild client bundle | Fast vanilla TS build, no React/Vue |
 
 ## Scaling notes (interview talking point)
 
-For ~thousands of users: shard by room, throttle `cursor:move`, batch `stroke:point` on a short rAF/interval window, consider binary encoding (MessagePack) for point arrays, and keep one authoritative state service per room rather than client prediction of other users’ ink.
+For ~thousands of concurrent users: shard by room, keep cursors throttled, batch `stroke:point` on a short window, consider binary encoding (MessagePack) for point arrays, and keep one authoritative state service per room rather than client-predicting other users’ ink.
