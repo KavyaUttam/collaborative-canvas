@@ -1,0 +1,35 @@
+{
+  "name": "collaborative-canvas",
+  "version": "1.0.0",
+  "description": "Real-time collaborative drawing canvas for Flam SSDE assignment",
+  "main": "dist/server/server.js",
+  "scripts": {
+    "build": "npm run build:server && npm run build:client",
+    "build:server": "tsc -p tsconfig.json",
+    "build:client": "esbuild client/main.ts --bundle --outfile=dist/public/bundle.js --platform=browser --target=es2020 && node scripts/copy-static.js",
+    "start": "node dist/server/server.js",
+    "dev": "npm run build && npm start",
+    "dev:watch": "node scripts/dev.js"
+  },
+  "keywords": [
+    "collaborative",
+    "canvas",
+    "socket.io",
+    "realtime"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}
