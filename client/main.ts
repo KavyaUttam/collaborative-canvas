@@ -3,18 +3,21 @@ import {
   DrawingEngine,
   resizeCanvasToDisplaySize,
 } from "./canvas";
+import { CursorOverlay } from "./cursors";
 import { UIController } from "./ui";
 import { SocketClient } from "./websocket";
 import type { ServerMessage, Stroke } from "../shared/protocol";
 import type { BrushSettings } from "./types";
 
 /**
- * Application entry: wire Canvas ↔ Engine ↔ Socket for live stroke sync.
+ * Application entry: wire Canvas ↔ Engine ↔ Socket for live sync,
+ * presence, cursors, and server-authoritative undo/redo.
  */
 function main(): void {
   const canvas = document.getElementById("drawing-canvas") as HTMLCanvasElement | null;
-  if (!canvas) {
-    throw new Error("Missing #drawing-canvas element");
+  const overlayRoot = document.getElementById("cursor-overlay");
+  if (!canvas || !overlayRoot) {
+    throw new Error("Missing #drawing-canvas or #cursor-overlay");
   }
 
   const ctx = canvas.getContext("2d");
@@ -27,23 +30,29 @@ function main(): void {
     color: "#1a1a1a",
     width: 4,
   };
-  let onlineCount = 0;
 
   const engine = new DrawingEngine(ctx, "local");
+  const cursors = new CursorOverlay(overlayRoot);
+
+  let socket!: SocketClient;
 
   const ui = new UIController({
     onSettingsChange: (settings) => {
       brushSettings = settings;
     },
     onClear: () => {
-      engine.clear();
+      socket.send({ type: "canvas:clear" });
+    },
+    onUndo: () => {
+      socket.send({ type: "history:undo" });
+    },
+    onRedo: () => {
+      socket.send({ type: "history:redo" });
     },
   });
 
-  const socket = new SocketClient((message) => {
-    onlineCount = applyServerMessage(message, ui, engine, onlineCount, (id) => {
-      engine.setUserId(id);
-    });
+  socket = new SocketClient((message) => {
+    applyServerMessage(message, { ui, engine, cursors });
   });
 
   const controller = new CanvasController(canvas, engine, () => brushSettings, {
@@ -70,6 +79,12 @@ function main(): void {
         strokeId,
       });
     },
+    onCursorMove: (point) => {
+      socket.send({
+        type: "cursor:move",
+        point,
+      });
+    },
   });
 
   function fitCanvas(): void {
@@ -81,6 +96,7 @@ function main(): void {
 
   ui.mount();
   controller.attach();
+  cursors.start();
   fitCanvas();
   window.addEventListener("resize", fitCanvas);
 
@@ -96,32 +112,35 @@ function main(): void {
   }, 200);
 }
 
-function applyServerMessage(
-  message: ServerMessage,
-  ui: UIController,
-  engine: DrawingEngine,
-  onlineCount: number,
-  onIdentity: (userId: string) => void
-): number {
+type AppParts = {
+  ui: UIController;
+  engine: DrawingEngine;
+  cursors: CursorOverlay;
+};
+
+function applyServerMessage(message: ServerMessage, app: AppParts): void {
+  const { ui, engine, cursors } = app;
+
   switch (message.type) {
     case "room:state":
       ui.setConnectionStatus(true);
-      ui.setOnlineUserCount(message.users.length);
-      onIdentity(message.yourUserId);
+      ui.setLocalUserId(message.yourUserId);
+      ui.setUsers(message.users);
+      cursors.setLocalUserId(message.yourUserId);
+      cursors.setUsers(message.users);
+      engine.setUserId(message.yourUserId);
       engine.loadCompleted(message.strokes);
-      return message.users.length;
+      break;
 
-    case "user:joined": {
-      const next = onlineCount + 1;
-      ui.setOnlineUserCount(next);
-      return next;
-    }
+    case "user:joined":
+      ui.addUser(message.user);
+      cursors.addUser(message.user);
+      break;
 
-    case "user:left": {
-      const next = Math.max(0, onlineCount - 1);
-      ui.setOnlineUserCount(next);
-      return next;
-    }
+    case "user:left":
+      ui.removeUser(message.userId);
+      cursors.removeUser(message.userId);
+      break;
 
     case "stroke:start": {
       const stroke: Stroke = {
@@ -133,23 +152,39 @@ function applyServerMessage(
         points: [message.point],
       };
       engine.startRemoteStroke(stroke);
-      return onlineCount;
+      break;
     }
 
     case "stroke:point":
       engine.continueRemoteStroke(message.strokeId, message.point);
-      return onlineCount;
+      break;
 
     case "stroke:end":
       engine.finishRemoteStroke(message.strokeId);
-      return onlineCount;
+      break;
+
+    case "cursor:move":
+      cursors.updateCursor(message.userId, message.point);
+      break;
+
+    case "history:undone":
+      engine.removeCompletedStroke(message.strokeId);
+      break;
+
+    case "history:redone":
+      engine.appendCompletedStroke(message.stroke);
+      break;
+
+    case "canvas:cleared":
+      engine.clear();
+      break;
 
     case "error":
       console.warn("[ws]", message.message);
-      return onlineCount;
+      break;
 
     default:
-      return onlineCount;
+      break;
   }
 }
 

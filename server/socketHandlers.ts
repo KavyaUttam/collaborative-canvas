@@ -9,7 +9,8 @@ import type { RoomManager } from "./rooms";
 
 /**
  * Registers Socket.io event handlers.
- * Server does not draw — it validates, stores, and broadcasts stroke events.
+ * Server does not draw — it validates, stores, and broadcasts.
+ * Undo/redo/clear mutate authoritative history first, then notify the whole room.
  */
 export function registerSocketHandlers(io: Server, rooms: RoomManager): void {
   io.on("connection", (socket: Socket) => {
@@ -38,7 +39,7 @@ export function registerSocketHandlers(io: Server, rooms: RoomManager): void {
         socket.emit("message", { type: "error", message: "Invalid message shape" });
         return;
       }
-      handleClientMessage(socket, roomId, user.id, rooms, payload);
+      handleClientMessage(io, socket, roomId, user.id, rooms, payload);
     });
 
     socket.on("disconnect", () => {
@@ -66,6 +67,7 @@ export function registerSocketHandlers(io: Server, rooms: RoomManager): void {
 }
 
 function handleClientMessage(
+  io: Server,
   socket: Socket,
   roomId: string,
   userId: string,
@@ -91,7 +93,6 @@ function handleClientMessage(
         socket.emit("message", { type: "error", message: "Rejected stroke:start" });
         return;
       }
-      // Sender already painted locally — broadcast to peers only.
       socket.to(roomId).emit("message", {
         type: "stroke:start",
         userId,
@@ -128,10 +129,57 @@ function handleClientMessage(
       });
       break;
     }
+    case "cursor:move": {
+      if (!isFinitePoint(message.point)) {
+        return;
+      }
+      socket.to(roomId).emit("message", {
+        type: "cursor:move",
+        userId,
+        point: message.point,
+      });
+      break;
+    }
+    case "history:undo": {
+      const stroke = drawing.undo();
+      if (!stroke) {
+        return;
+      }
+      // Whole room (including requester) applies the same authoritative result.
+      io.to(roomId).emit("message", {
+        type: "history:undone",
+        userId,
+        strokeId: stroke.id,
+      });
+      break;
+    }
+    case "history:redo": {
+      const stroke = drawing.redo();
+      if (!stroke) {
+        return;
+      }
+      io.to(roomId).emit("message", {
+        type: "history:redone",
+        userId,
+        stroke,
+      });
+      break;
+    }
+    case "canvas:clear": {
+      drawing.clear();
+      io.to(roomId).emit("message", {
+        type: "canvas:cleared",
+        userId,
+      });
+      break;
+    }
     default:
-      // Cursor / undo / clear arrive in later milestones.
       break;
   }
+}
+
+function isFinitePoint(point: Point): boolean {
+  return Number.isFinite(point.x) && Number.isFinite(point.y);
 }
 
 function isClientMessage(value: unknown): value is ClientMessage {

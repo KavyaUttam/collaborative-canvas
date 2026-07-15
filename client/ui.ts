@@ -1,13 +1,16 @@
 import type { BrushSettings, Tool } from "./types";
+import type { UserInfo } from "../shared/protocol";
 import { clamp } from "./utils";
 
 export interface UICallbacks {
   onSettingsChange: (settings: BrushSettings) => void;
   onClear: () => void;
+  onUndo: () => void;
+  onRedo: () => void;
 }
 
 /**
- * Toolbar / chrome only. Updates brush settings; does not draw.
+ * Toolbar / chrome only. Updates brush settings and presence UI; does not draw.
  */
 export class UIController {
   private settings: BrushSettings = {
@@ -18,7 +21,9 @@ export class UIController {
 
   private readonly callbacks: UICallbacks;
   private statusEl: HTMLElement | null = null;
-  private userCountEl: HTMLElement | null = null;
+  private userListEl: HTMLElement | null = null;
+  private localUserId: string | null = null;
+  private users: UserInfo[] = [];
 
   constructor(callbacks: UICallbacks) {
     this.callbacks = callbacks;
@@ -26,7 +31,7 @@ export class UIController {
 
   mount(root: Document = document): void {
     this.statusEl = root.getElementById("connection-status");
-    this.userCountEl = root.getElementById("user-count");
+    this.userListEl = root.getElementById("user-list");
 
     const colorInput = root.getElementById("color-picker") as HTMLInputElement | null;
     const widthInput = root.getElementById("brush-width") as HTMLInputElement | null;
@@ -34,6 +39,8 @@ export class UIController {
     const brushBtn = root.getElementById("tool-brush");
     const eraserBtn = root.getElementById("tool-eraser");
     const clearBtn = root.getElementById("tool-clear");
+    const undoBtn = root.getElementById("tool-undo");
+    const redoBtn = root.getElementById("tool-redo");
 
     colorInput?.addEventListener("input", () => {
       if (!colorInput.value) {
@@ -55,12 +62,19 @@ export class UIController {
     brushBtn?.addEventListener("click", () => this.setTool("brush", brushBtn, eraserBtn));
     eraserBtn?.addEventListener("click", () => this.setTool("eraser", brushBtn, eraserBtn));
     clearBtn?.addEventListener("click", () => this.callbacks.onClear());
+    undoBtn?.addEventListener("click", () => this.callbacks.onUndo());
+    redoBtn?.addEventListener("click", () => this.callbacks.onRedo());
 
     this.emitSettings();
   }
 
   getSettings(): BrushSettings {
     return this.settings;
+  }
+
+  setLocalUserId(userId: string): void {
+    this.localUserId = userId;
+    this.renderUsers();
   }
 
   setConnectionStatus(connected: boolean): void {
@@ -71,11 +85,49 @@ export class UIController {
     this.statusEl.dataset.state = connected ? "online" : "offline";
   }
 
-  setOnlineUserCount(count: number): void {
-    if (!this.userCountEl) {
+  setUsers(users: UserInfo[]): void {
+    this.users = users;
+    this.renderUsers();
+  }
+
+  addUser(user: UserInfo): void {
+    if (this.users.some((existing) => existing.id === user.id)) {
       return;
     }
-    this.userCountEl.textContent = String(count);
+    this.users = [...this.users, user];
+    this.renderUsers();
+  }
+
+  removeUser(userId: string): void {
+    this.users = this.users.filter((user) => user.id !== userId);
+    this.renderUsers();
+  }
+
+  private renderUsers(): void {
+    if (!this.userListEl) {
+      return;
+    }
+    this.userListEl.replaceChildren();
+
+    for (const user of this.users) {
+      const li = document.createElement("li");
+      li.className = "user-chip";
+      if (user.id === this.localUserId) {
+        li.classList.add("is-you");
+      }
+
+      const dot = document.createElement("span");
+      dot.className = "user-chip__dot";
+      dot.style.background = user.color;
+
+      const name = document.createElement("span");
+      name.className = "user-chip__name";
+      name.textContent =
+        user.id === this.localUserId ? `${user.name} (you)` : user.name;
+
+      li.append(dot, name);
+      this.userListEl.appendChild(li);
+    }
   }
 
   private setTool(

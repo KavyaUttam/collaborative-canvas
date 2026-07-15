@@ -46,15 +46,16 @@ Why: redraw, sync, and global undo/redo become operations on a list instead of f
 ```
 pointerdown → DrawingEngine.startLocalStroke → emit stroke:start
 pointermove → DrawingEngine.continueLocalStroke → emit stroke:point
+             (+ throttled cursor:move)
 pointerup   → DrawingEngine.finishLocalStroke → emit stroke:end
 
 peers:
-  stroke:start → DrawingEngine.startRemoteStroke   (incremental paint)
-  stroke:point → DrawingEngine.continueRemoteStroke
-  stroke:end   → DrawingEngine.finishRemoteStroke  (move into completed list)
+  stroke:*     → DrawingEngine remote path (incremental paint)
+  cursor:move  → HTML overlay indicators (never on drawing canvas)
+  history:*    → remove/append stroke then redraw / paint
 ```
 
-Incremental painting avoids full-canvas redraws on every mouse move / inbound point. Full `redraw()` runs on resize and after loading `room:state`.
+Incremental painting avoids full-canvas redraws on every mouse move / inbound point. Full `redraw()` runs on resize, undo, and after loading `room:state`.
 
 Coordinates are **CSS pixels**; the canvas backing store uses `devicePixelRatio` via `ctx.setTransform`, so retina screens stay sharp without breaking cross-device sync.
 
@@ -62,35 +63,33 @@ Coordinates are **CSS pixels**; the canvas backing store uses `devicePixelRatio`
 
 Messages use a discriminated `type` field.
 
-| Direction | Types in use |
-|-----------|----------------|
-| Client → Server | `stroke:start`, `stroke:point`, `stroke:end` |
-| Server → Client | `room:state`, `stroke:*`, `user:joined`, `user:left`, `error` |
+| Direction | Types |
+|-----------|--------|
+| Client → Server | `stroke:start/point/end`, `cursor:move`, `history:undo/redo`, `canvas:clear` |
+| Server → Client | `room:state`, `stroke:*`, `cursor:move`, `history:undone/redone`, `canvas:cleared`, `user:*`, `error` |
 
-Broadcast rule: peers only (`socket.to(room)`), never echo back to the sender (they already painted locally).
+Broadcast rules:
+
+- **Live ink / cursors:** peers only (`socket.to(room)`) — sender already applied locally.
+- **History mutate (undo/redo/clear):** entire room (`io.to(room)`) **after** the server updates authoritative state — every client converges on the same history.
 
 Server pipeline:
 
 ```
-Receive → Validate (shape, ownership, finite points) → Persist active/completed → Broadcast
+Receive → Validate → Mutate DrawingState (if needed) → Broadcast
 ```
 
-Planned next:
+## Undo / redo strategy (implemented)
 
-- `cursor:move`
-- `history:undo` / `history:redo`
-- `canvas:clear`
+- Two stacks on the server: completed stroke history + redo stack.
+- **Undo:** pop last completed stroke (any user) → push redo → broadcast `history:undone { strokeId }`.
+- **Redo:** pop redo → push history → broadcast `history:redone { stroke }`.
+- A new stroke clears the redo stack (standard editor semantics).
+- Clients never invent undo optimistically — they wait for the server event, then remove/replay strokes (vector redraw, not bitmap snapshots).
 
-## Undo / redo strategy (planned)
+## Conflict resolution
 
-- **Server-authoritative** operation log on the completed-stroke list.
-- Undo pops the latest stroke (any user), broadcasts `history:undone`, clients remove that stroke and redraw.
-- Redo pushes from a redo stack; a new stroke clears redo (standard editor semantics).
-- Conflict rule: last completed operation wins; simultaneous undos are serialized by the server.
-
-## Conflict resolution (planned)
-
-Simultaneous drawing in overlapping areas does not conflict at the data layer: strokes are append-only. Visual overlaps are expected painter’s-algorithm order (earlier strokes underneath). Eraser strokes are separate entries with `destination-out` composite.
+Simultaneous drawing is append-only; visual overlaps use painter’s order. Concurrent undos are serialized by the Node event loop on the authoritative `DrawingState`, so clients never disagree about which stroke left the history.
 
 ## Performance decisions
 

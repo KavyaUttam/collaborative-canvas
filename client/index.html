@@ -27,6 +27,12 @@
           <button type="button" id="tool-eraser" class="tool" title="Eraser">
             Eraser
           </button>
+          <button type="button" id="tool-undo" class="tool" title="Undo last stroke (global)">
+            Undo
+          </button>
+          <button type="button" id="tool-redo" class="tool" title="Redo (global)">
+            Redo
+          </button>
           <button type="button" id="tool-clear" class="tool tool--danger" title="Clear canvas">
             Clear
           </button>
@@ -45,15 +51,20 @@
 
         <div class="toolbar__meta">
           <span id="connection-status" class="status" data-state="offline">Disconnected</span>
-          <span class="users">
-            Online: <strong id="user-count">0</strong>
-          </span>
         </div>
       </header>
 
-      <main class="stage">
-        <canvas id="drawing-canvas" aria-label="Drawing surface"></canvas>
-      </main>
+      <div class="workspace">
+        <aside class="presence" aria-label="Online users">
+          <h2 class="presence__title">Online</h2>
+          <ul id="user-list" class="user-list"></ul>
+        </aside>
+
+        <main class="stage">
+          <canvas id="drawing-canvas" aria-label="Drawing surface"></canvas>
+          <div id="cursor-overlay" class="cursor-overlay" aria-hidden="true"></div>
+        </main>
+      </div>
     </div>
     <script src="/bundle.js"></script>
   </body>

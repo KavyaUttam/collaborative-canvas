@@ -5,6 +5,7 @@ export type StrokeSyncHooks = {
   onStrokeStart: (stroke: Stroke) => void;
   onStrokePoint: (strokeId: string, point: Point) => void;
   onStrokeEnd: (strokeId: string) => void;
+  onCursorMove?: (point: Point) => void;
 };
 
 /**
@@ -120,6 +121,27 @@ export class DrawingEngine {
     this.clearCanvas();
   }
 
+  /** Apply authoritative undo: drop completed stroke by id, then replay. */
+  removeCompletedStroke(strokeId: string): boolean {
+    const index = this.completed.findIndex((stroke) => stroke.id === strokeId);
+    if (index === -1) {
+      return false;
+    }
+    this.completed.splice(index, 1);
+    this.redraw();
+    return true;
+  }
+
+  /** Apply authoritative redo: append stroke and paint it. */
+  appendCompletedStroke(stroke: Stroke): void {
+    if (this.completed.some((existing) => existing.id === stroke.id)) {
+      return;
+    }
+    const cloned = cloneStroke(stroke);
+    this.completed.push(cloned);
+    this.paintStroke(cloned);
+  }
+
   /** Full redraw from stroke list (used after undo/resize). */
   redraw(): void {
     this.clearCanvas();
@@ -208,6 +230,7 @@ export class CanvasController {
   private readonly getSettings: () => BrushSettings;
   private readonly hooks: StrokeSyncHooks | null;
   private drawing = false;
+  private lastCursorSentAt = 0;
 
   constructor(
     canvas: HTMLCanvasElement,
@@ -226,7 +249,7 @@ export class CanvasController {
     this.canvas.addEventListener("pointermove", this.onPointerMove);
     this.canvas.addEventListener("pointerup", this.onPointerUp);
     this.canvas.addEventListener("pointercancel", this.onPointerUp);
-    this.canvas.addEventListener("pointerleave", this.onPointerUp);
+    this.canvas.addEventListener("pointerleave", this.onPointerLeave);
   }
 
   detach(): void {
@@ -234,7 +257,7 @@ export class CanvasController {
     this.canvas.removeEventListener("pointermove", this.onPointerMove);
     this.canvas.removeEventListener("pointerup", this.onPointerUp);
     this.canvas.removeEventListener("pointercancel", this.onPointerUp);
-    this.canvas.removeEventListener("pointerleave", this.onPointerUp);
+    this.canvas.removeEventListener("pointerleave", this.onPointerLeave);
   }
 
   private onPointerDown = (event: PointerEvent): void => {
@@ -246,9 +269,13 @@ export class CanvasController {
     const point = this.toCanvasPoint(event);
     const stroke = this.engine.startLocalStroke(point, this.getSettings());
     this.hooks?.onStrokeStart(stroke);
+    this.emitCursor(point, true);
   };
 
   private onPointerMove = (event: PointerEvent): void => {
+    const point = this.toCanvasPoint(event);
+    this.emitCursor(point, false);
+
     if (!this.drawing) {
       return;
     }
@@ -256,7 +283,6 @@ export class CanvasController {
     if (!strokeId) {
       return;
     }
-    const point = this.toCanvasPoint(event);
     this.engine.continueLocalStroke(point);
     this.hooks?.onStrokePoint(strokeId, point);
   };
@@ -275,6 +301,20 @@ export class CanvasController {
       this.hooks?.onStrokeEnd(strokeId);
     }
   };
+
+  private onPointerLeave = (): void => {
+    // Keep last remote cursor; local presence stop is optional for Day 3.
+  };
+
+  private emitCursor(point: Point, force: boolean): void {
+    const now = performance.now();
+    // ~20Hz cap — cursors don't need stroke-level fidelity.
+    if (!force && now - this.lastCursorSentAt < 50) {
+      return;
+    }
+    this.lastCursorSentAt = now;
+    this.hooks?.onCursorMove?.(point);
+  }
 
   /** CSS-pixel coords so synced strokes match across devicePixelRatio differences. */
   private toCanvasPoint(event: PointerEvent): Point {

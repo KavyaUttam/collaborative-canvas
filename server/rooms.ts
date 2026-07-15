@@ -21,6 +21,7 @@ export class RoomManager {
   private rooms = new Map<string, Room>();
   private drawingByRoom = new Map<string, DrawingState>();
   private colorIndex = 0;
+  private userNumber = 1;
 
   getOrCreate(roomId: string): { room: Room; drawing: DrawingState } {
     let room = this.rooms.get(roomId);
@@ -49,9 +50,10 @@ export class RoomManager {
     const user: RoomUser = {
       id: socketId,
       socketId,
-      name: preferredName ?? `User ${room.users.size + 1}`,
+      name: preferredName ?? `User ${this.userNumber}`,
       color,
     };
+    this.userNumber += 1;
     room.users.set(socketId, user);
     return user;
   }
