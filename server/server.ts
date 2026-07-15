@@ -14,7 +14,11 @@ function createApp(): express.Application {
   app.use(express.static(PUBLIC_DIR));
 
   app.get("/health", (_req, res) => {
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      uptime: process.uptime(),
+      timestamp: Date.now(),
+    });
   });
 
   // SPA-style fallback: serve index for unknown routes
