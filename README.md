@@ -6,6 +6,9 @@ Real-time multi-user drawing board for the **Flam SSDE** assignment — **TypeSc
 
 **Repository:** https://github.com/KavyaUttam/collaborative-canvas
 
+demonstraition video:** [https://drive.google.com/file/d/1A0OHvBP12nwxBI3Z3Wg2G1wm7N7dq2s4/view?usp=sharing]
+
+
 ## Features
 
 - Real-time collaborative drawing
